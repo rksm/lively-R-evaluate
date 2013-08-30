@@ -1,0 +1,10 @@
+Package: LivelyREvaluate
+Type: Package
+Title: Providing support for code evaluation for LivelyWeb.
+Version: 0.1.0
+Date: 2013-08-29
+Author: Robert Krahn
+Maintainer: Robert Krahn <robert.krahn@gmail.com>
+Description: Providing support for code evaluation for LivelyWeb.
+License: MIT
+Depends: evaluate (>= 0.4.7), rjson (>= 0.2.13), multicore (>= 0.1)
