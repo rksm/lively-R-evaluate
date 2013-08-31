@@ -1,6 +1,6 @@
-# LivelyREvaluate
+# lively-R-evaluate
 
-LivelyREvaluate provides support for R code evaluation for [Lively Kernel / Lively Web](https://github.com/LivelyKernel/LivelyKernel).
+lively-R-evaluate provides support for R code evaluation for [Lively Kernel / Lively Web](https://github.com/LivelyKernel/LivelyKernel).
 It defines the R API that is called by the [Lively RServer](https://github.com/LivelyKernel/RServer).
 
 # API
