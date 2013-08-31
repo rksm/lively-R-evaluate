@@ -4,7 +4,7 @@ require(parallel)
 require(tools)
 
 # helper for interactive package development
-reload <- function( path ) {
+reload <- function(path) {
     name = "LivelyREvaluate"
     packageName = paste("package", name, sep=":")
     detach(packageName, unload = TRUE,character.only=TRUE)
@@ -35,7 +35,10 @@ evalProcs <- new.env(hash=T, parent=emptyenv())
 #            output. see evaluate::new_output_handler and .evaluateString() for
 #            more details
 createEvalState <- function(id="", source="") {
-    list(id=id, source=source, statementIndex=0,
+    list(id=id,
+         source=source,
+         statementIndex=0,
+         interrupted=FALSE,
          result=data.frame(
             source=character(),
             value=character(),
@@ -57,44 +60,56 @@ getEvalResults = function() {
 }
 
 # helper for collecting a eval process
-collectEvalProc = function(id) {
+.collectEvalProc = function(id) {
     proc = evalProcs[[id]]
-    if (is.null(proc)) return(NULL)
+    if (is.null(proc)) return(NULL) # no eval process with this id running
     result = parallel::mccollect(proc, wait=FALSE)
-    message(paste("Collecting:", toString(result)))
-    if (!is.null(result)) remove(list=c(id), envir=evalProcs)
-    if (inherits(result,"try-error")) result
-    else result[[1]]
+    if (is.null(result)) return(NULL) # process not yet done
+    remove(list=c(id), envir=evalProcs)
+    if (inherits(result,"try-error")) {
+        warning(paste("result of parallel eval process is an error", result))
+        return(result)
+    } else {
+        evalState = result[[1]]
+        evalState$interrupted = evalState$result[nrow(evalState$result),'source'] != endMarker
+        if (!evalState$interrupted) evalState$result = evalState$result[-nrow(evalState$result),]
+        return(evalState)
+    }
 }
 
-killEvalProc = function(id) {
+stopEval = function(id) {
     proc = evalProcs[[id]]
-    if (!is.null(proc)) tools::pskill(proc$pid)
+    if (!is.null(proc)) tools::pskill(proc$pid, signal=SIGINT)
 }
 
 # return a specific eval result
-getEvalResult = function(id, format="R", file=NULL) {
-    result = evalResults[[id]]
-    if (is.null(result)) {
-        result = collectEvalProc(id)
-        if (!is.null(result)) evalResults[[id]] = result
+getEvalResult = function(id,         # id under which the eval was started
+                         format="R", # c("R","JSON")
+                         file=NULL   # optionally write result into file
+                         ) {
+    evalState = evalResults[[id]] # do we already have a result?
+    if (is.null(evalState)) { # eval still running, try collect result
+        evalState = .collectEvalProc(id)
+        if (!is.null(evalState)) evalResults[[id]] = evalState
     }
-    if (inherits(result,"try-error")) result = toString(result)
-    else result = result$result
+    result = NULL
+    if (inherits(evalState,"try-error")) result = toString(evalState)
+    else result = list(interrupted=evalState$interrupted,result=evalState$result)
     if (format == "JSON") result = rjson::toJSON(result)
-    if (!is.null(file)) {
-        write(result, file = file)
-    }
+    if (!is.null(file)) write(result, file = file) # optional file output
     result
 }
 
-isDone = function(id) {
+getEvalProcessState = function(id) {
     result = getEvalResult(id)
-    !is.null(result) && (inherits(result, "try-error") || endMarker %in% result$result$source)
+    if (!is.null(result)) return('DONE')
+    if (!is.null(evalProcs[[id]])) return('PENDING')
+    return('NOTEXISTING')
 }
 
 .whenEvalFinished = function(evalResult) {
     parallel:::sendMaster(evalResult)
+    message('Eval is done')
     quit(save = "no", status = 0, runLast = FALSE)
 }
 
