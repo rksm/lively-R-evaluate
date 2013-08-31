@@ -25,26 +25,51 @@ Start a new evaluation under the given id.
 The evaluation result will the be a pairlist with the fields `interrupted=FALSE` and
 `result=`
 
-| |            source|value|text|graphics|                                       message|warning|error|
-|-|------------------|-----|----|--------|----------------------------------------------|-------|-----|
-|1| message("hello!")| <NA>|<NA>|    <NA>|simpleMessage in message("hello!"): hello!\n\n|   <NA>| <NA>|
-|2|               1+4|    5|<NA>|    <NA>|                                          <NA>|   <NA>| <NA>|
-
+expr | source            | value| text      | graphics   | message                                    | warning | error
+---  | ----------------- | -----   | ----   | --------   | ------------------------------------------ | ------- | -----
+1    | message("hello!") |  \<NA\> | \<NA\> |     \<NA\> | simpleMessage in message("hello!"): hello! |  \<NA\> |  \<NA\>
+2    |               1+4 |     5   | \<NA\> |     \<NA\> |                                     \<NA\> |  \<NA\> |  \<NA\>
 
 
 ## evaluateToJSON(json)
 
-`json = {id: STRING, source: STRING}`
+Call evaluate by specifying id and source with JSON and return the result as JSON
+
+### Arguments
+
+- json - `{id: STRING, source: STRING}`
 
 ## stopEvaluation(id)
 
+Interrupts an evaluation process.
+
+### Arguments
+
+- id - The process name/identifier (id given by user, not pid!)
+
 ## getEvalResult(id)
 
+Returns the evaluation result.
+
+### Arguments
+
+- id - The eval identifier
+
+### Example
+
+See `evaluate()`
+
 ## getEvalResults()
+
+Returns all evaluation results.
 
 ## getEvalProcessState(id)
 
 returns `"DONE"`, `"PENDING"`, or `"NONEXISTING"`
+
+### Arguments
+
+- id - The eval identifier
 
 
 # License
