@@ -7,4 +7,4 @@ Author: Robert Krahn
 Maintainer: Robert Krahn <robert.krahn@gmail.com>
 Description: Providing support for code evaluation for LivelyWeb.
 License: MIT
-Depends: evaluate (>= 0.4.7), rjson (>= 0.2.13), multicore (>= 0.1)
+Depends: evaluate (>= 0.4.7), rjson (>= 0.2.13), parallel, tools
