@@ -16,11 +16,13 @@ Start a new evaluation under the given id.
 
 ### Example
 
-    require(LivelyREvaluate)
-    evaluate('test', '1+4')
-    # evaluation happens in asynchronously in subprocess, so wait a bit
-    Sys.sleep(0.2)
-    getEvalResult('test')
+```S
+require(LivelyREvaluate)
+evaluate('test', '1+4')
+# evaluation happens in asynchronously in subprocess, so wait a bit
+Sys.sleep(0.2)
+getEvalResult('test')
+```
 
 The evaluation result will the be a pairlist with the fields `interrupted=FALSE` and
 `result=`
