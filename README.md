@@ -24,8 +24,10 @@ Sys.sleep(0.2)
 getEvalResult('test')
 ```
 
-The evaluation result will the be a pairlist with the fields `interrupted=FALSE` and
-`result=`
+The evaluation result will the be a pairlist with the fields:
+- `interrupted=c(TRUE,FALSE)`
+- `processState=c("DONE","PENDING","NONEXISTANT")`
+- `result=`
 
 expr | source            | value| text      | graphics   | message                                    | warning | error
 ---  | ----------------- | -----   | ----   | --------   | ------------------------------------------ | ------- | -----
@@ -64,14 +66,6 @@ See `evaluate()`
 ## getEvalResults()
 
 Returns all evaluation results.
-
-## getEvalProcessState(id)
-
-returns `"DONE"`, `"PENDING"`, or `"NONEXISTING"`
-
-### Arguments
-
-- id - The eval identifier
 
 
 # License

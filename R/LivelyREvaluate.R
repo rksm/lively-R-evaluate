@@ -42,11 +42,12 @@ require(tools)
 #   result - data.frame that holds on to the different types of evaluation
 #            output. see evaluate::new_output_handler and .evaluateString() for
 #            more details
-.createEvalState <- function(id="", source="") {
+.createEvalState <- function(id="", source="", env=parent.frame()) {
     list(id=id,
          source=source,
          statementIndex=0,
          interrupted=FALSE,
+         env=env,
          result=data.frame(
             source=character(),
             value=character(),
@@ -74,9 +75,22 @@ require(tools)
         return(result)
     } else {
         evalState = result[[1]]
+        .mergeEnvironments(globalenv(), evalState$env)
         evalState$interrupted = evalState$result[nrow(evalState$result),'source'] != .endMarker
         if (!evalState$interrupted) evalState$result = evalState$result[-nrow(evalState$result),]
         return(evalState)
+    }
+}
+
+.mergeEnvironments = function(baseEnv, envToMerge) {
+    for (name in ls(envToMerge, all.names=TRUE)) {
+        if (exists(name, envir=envToMerge, inherits=FALSE)) {
+            value = get(name, envir=envToMerge)
+            if (!exists(name, envir=baseEnv) || !identical(value, get(name, envir=baseEnv))) {
+                message(paste('assigning ', name))
+                assign(name, value, envir=baseEnv)
+            }
+        }
     }
 }
 
@@ -88,8 +102,8 @@ require(tools)
 
 # here we start the evaluation and define the output_handler used by
 # evaluate::evaluate. Returns an evalState 
-.evaluateString <- function(evalId, string, exit=FALSE) {
-    evalState = .createEvalState(id=evalId, source=string)
+.evaluateString <- function(evalId, string, exit=FALSE, envir=parent.frame()) {
+    evalState = .createEvalState(id=evalId, source=string, env=envir)
     if (exit) {
         # when we are evaluating in a separate process make sure that we quit
         # the process when eval is done
@@ -111,6 +125,7 @@ require(tools)
         value = function(val){ recordResult('value', val); return(val) })
     evaluate::evaluate(
         paste(string, .endMarker, sep="\n"),
+        envir=envir,
         stop_on_error=1,
         output_handler=evalHandler)
     return(evalState)
@@ -119,6 +134,15 @@ require(tools)
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # accessors
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+.getEvalProcessState <- function(id,result) {
+    if (!is.null(result)) {
+        if (result$interrupted) return('INTERRUPTED')
+        else return('DONE')
+    }
+    if (!is.null(.evalProcs[[id]])) return('PENDING')
+    return('NOTEXISTING')
+}
 
 getEvalResults <- function() {
     # returns every eval result we have gathered so far
@@ -136,29 +160,30 @@ getEvalResult <- function(id,         # id under which the eval was started
         if (!is.null(evalState)) .evalResults[[id]] = evalState
     }
     result = NULL
-    if (inherits(evalState,"try-error")) result = toString(evalState)
-    else result = list(interrupted=evalState$interrupted,result=evalState$result)
+    if (inherits(evalState,"try-error")) {
+        result = toString(evalState)
+    } else {
+        result = list(
+            processState=.getEvalProcessState(id,evalState),
+            result=evalState$result)
+    }
     if (format == "JSON") result = rjson::toJSON(result)
     if (!is.null(file)) write(result, file = file) # optional file output
     result
-}
-
-getEvalProcessState <- function(id) {
-    result = getEvalResult(id)
-    if (!is.null(result)) return('DONE')
-    if (!is.null(.evalProcs[[id]])) return('PENDING')
-    return('NOTEXISTING')
 }
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # evaluation control
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-evaluate <- function(id, string) {
+evaluate <- function(id, string, envir=environment()) {
     # evaluate function, main entry point
     .evalProcs[[id]] = parallel::mcparallel(
-        .evaluateString(id, string, exit=TRUE),
+        .evaluateString(id, string, exit=TRUE, envir=envir),
         name=id)
+    # immediatelly initialize a collect for processes returning quickly
+    # Sys.sleep(0.6)
+    # getEvalResult(id)
 }
 
 evaluateToJSON <- function(json) {
