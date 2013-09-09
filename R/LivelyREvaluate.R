@@ -46,7 +46,7 @@ require(tools)
     list(id=id,
          source=source,
          statementIndex=0,
-         interrupted=FALSE,
+         stopCause=NULL,
          env=env,
          result=data.frame(
             source=character(),
@@ -63,39 +63,77 @@ require(tools)
     remove(list=ls(.evalResults), envir=.evalResults)
 }
 
-# helper for collecting a eval process
+# helper for collecting results from an eval process
+# if there is no process for the given id, return NULL.
+# try to fetch a result from the process.  if none available return NULL.
+# results are sent using sendMaster(evalState), so the value returned by
+#   mccollect() is a list of evalState objects (or an error)
+# if the result indicates an error, remove the process and return the error.
+# 
 .collectEvalProc = function(id) {
+    forgetProc = function() { remove(list=c(id), envir=.evalProcs) }
+
     proc = .evalProcs[[id]]
     if (is.null(proc)) return(NULL) # no eval process with this id running
-    result = parallel::mccollect(proc, wait=FALSE)
-    if (is.null(result)) return(NULL) # process not yet done
-    remove(list=c(id), envir=.evalProcs)
-    if (inherits(result,"try-error")) {
-        warning(paste("result of parallel eval process is an error", result))
-        return(result)
-    } else {
-        evalState = result[[1]]
-        .mergeEnvironments(globalenv(), evalState$env)
-        evalState$interrupted = evalState$result[nrow(evalState$result),'source'] != .endMarker
-        if (!evalState$interrupted) evalState$result = evalState$result[-nrow(evalState$result),]
-        return(evalState)
+    results <- parallel::mccollect(proc, wait=FALSE)
+    if (inherits(results,"try-error")) {
+      warning(paste0("error result from parallel eval process: ", results))
+      forgetProc()
+      return(results)
     }
+    evalState <- results[[1]]
+    if (is.null(evalState)) return(NULL)   # no result available (yet)
+    .mergeEnvironments(globalenv(), evalState$env)
+    lastResultRow <- nrow(evalState$result)
+    if (!is.na(evalState$result[lastResultRow, 'error'])) {
+      evalState$stopCause = "ERROR"
+      forgetProc()
+    } else if (evalState$result[lastResultRow,'source'] == .endMarker) {
+      evalState$result = evalState$result[-lastResultRow,]
+      evalState$stopCause = "COMPLETE"
+      forgetProc()
+    }
+    return(evalState)
 }
+
+# rk's version
+# .collectEvalProc = function(id) {
+#   proc = .evalProcs[[id]]
+#   if (is.null(proc)) return(NULL) # no eval process with this id running
+#   result <- parallel::mccollect(proc, wait=FALSE)
+#   if (is.null(result)) return(NULL) # process not yet done
+#   remove(list=c(id), envir=.evalProcs)
+#   if (inherits(result,"try-error")) {
+#     warning(paste("result of parallel eval process is an error", result))
+#     return(result)
+#   } else {
+#     evalState = result[[1]]
+#     .mergeEnvironments(globalenv(), evalState$env)
+#     evalState$interrupted = evalState$result[nrow(evalState$result),'source'] != .endMarker
+#     if (!evalState$interrupted) evalState$result = evalState$result[-nrow(evalState$result),]
+#     return(evalState)
+#   }
+# }
 
 .mergeEnvironments = function(baseEnv, envToMerge) {
     for (name in ls(envToMerge, all.names=TRUE)) {
         if (exists(name, envir=envToMerge, inherits=FALSE)) {
             value = get(name, envir=envToMerge)
             if (!exists(name, envir=baseEnv) || !identical(value, get(name, envir=baseEnv))) {
-                message(paste('assigning ', name))
+                message(paste0('assigning ', name))
                 assign(name, value, envir=baseEnv)
             }
         }
     }
 }
 
-.whenEvalFinished = function(evalResult) {
-    parallel:::sendMaster(evalResult)
+.whenEvalFinished = function(evalState) {
+    # this is triggered by
+    #  a. orderly exit from a parallel procedure
+    #  b. forced exit (using stopEvaluation)
+    # we are not responsible for clearing up the stored procedure and
+    # any results; this will be done when .collectEvalProc is next called
+    parallel:::sendMaster(evalState)
     message('Eval is done')
     quit(save = "no", status = 0, runLast = FALSE)
 }
@@ -104,6 +142,7 @@ require(tools)
 # evaluate::evaluate. Returns an evalState 
 .evaluateString <- function(evalId, string, exit=FALSE, envir=parent.frame()) {
     evalState = .createEvalState(id=evalId, source=string, env=envir)
+    .evalResults[[evalId]] <- evalState
     if (exit) {
         # when we are evaluating in a separate process make sure that we quit
         # the process when eval is done
@@ -114,6 +153,14 @@ require(tools)
             evalState$statementIndex <<- evalState$statementIndex + 1
         }
         evalState$result[evalState$statementIndex, type] <<- toString(value)
+        # ael: each value- or message-bearing result causes immediate sending
+        # of all results obtained since the last time we sent.
+        # it assumes that all other fields of the latest result are ready (ok?)
+        if (type == "value" || type == "message") {
+            parallel:::sendMaster(evalState)
+            evalState$result <<- evalState$result[FALSE,]   # wipe clean
+            evalState$statementIndex <<- 0
+        }
     }
     evalHandler <- evaluate::new_output_handler(
         source = function(x){ recordResult('source', x); },
@@ -135,14 +182,24 @@ require(tools)
 # accessors
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-.getEvalProcessState <- function(id,result) {
-    if (!is.null(result)) {
-        if (result$interrupted) return('INTERRUPTED')
-        else return('DONE')
-    }
-    if (!is.null(.evalProcs[[id]])) return('PENDING')
-    return('NOTEXISTING')
+.getEvalProcessState <- function(id) {
+    #   - no proc => UNKNOWN
+    #   - eval stopped => COMPLETE/INTERRUPT/ERROR
+    #   - eval running => RUNNING
+    proc <- .evalProcs[[id]]
+    if (is.null(proc)) return('UNKNOWN')
+    state <- .evalResults[[id]]
+    if (!is.null(state$stopCause)) return(state$stopCause)
+    return('RUNNING')
 }
+# .getEvalProcessState <- function(id,result) {
+#   if (!is.null(result)) {
+#     if (result$interrupted) return('INTERRUPTED')
+#         else return('DONE')
+#   }
+#   if (!is.null(.evalProcs[[id]])) return('PENDING')
+#   return('NOTEXISTING')
+# }
 
 getEvalResults <- function() {
     # returns every eval result we have gathered so far
@@ -154,23 +211,65 @@ getEvalResult <- function(id,         # id under which the eval was started
                          format="R", # c("R","JSON")
                          file=NULL   # optionally write result into file
                          ) {
-    evalState = .evalResults[[id]] # do we already have a result?
-    if (is.null(evalState)) { # eval still running, try collect result
-        evalState = .collectEvalProc(id)
-        if (!is.null(evalState)) .evalResults[[id]] = evalState
-    }
-    result = NULL
-    if (inherits(evalState,"try-error")) {
-        result = toString(evalState)
+    # possible states to be handled:
+    #   - no proc => UNKNOWN
+    #   - mcollect gives error => <error>
+    #   - mccollect returns NULL, eval was running => { PENDING, NULL }
+    #   - mccollect returns NULL, eval was stopped => { stopCause, NULL }
+    #   - mccollect returns empty non-NULL result => { stopCause, NULL }
+    #   - mccollect returns non-empty result => { PARTIAL, res }
+    runningState <- .getEvalProcessState(id)     # before calling mccollect
+    if (runningState == 'UNKNOWN') {
+      result = list(processState='UNKNOWN', result=NULL)
     } else {
-        result = list(
-            processState=.getEvalProcessState(id,evalState),
-            result=evalState$result)
+      newEvalState <- .collectEvalProc(id)
+      if (inherits(newEvalState,"try-error")) {
+        res <- toString(newEvalState)
+      } else if (is.null(newEvalState)) {
+        res <- NULL
+        if (runningState == 'RUNNING') { processState <- 'PENDING'
+          } else { processState <- runningState }
+      } else {  # found a new result (though perhaps just an empty one)
+        # if we already had a stopCause, don't overwrite it
+        oldStop <- .evalResults[[id]]$stopCause
+        if (!is.null(oldStop)) newEvalState$stopCause <- oldStop
+        .evalResults[[id]] <- newEvalState
+        res <- newEvalState$result
+        if (nrow(res) == 0) {
+          res <- NULL
+          processState <- newEvalState$stopCause
+        } else { processState <- 'PARTIAL' }
+      }
+      result <- list(
+            processState=processState,
+            result=res)
     }
     if (format == "JSON") result = rjson::toJSON(result)
     if (!is.null(file)) write(result, file = file) # optional file output
     result
 }
+
+# getEvalResult <- function(id,         # id under which the eval was started
+#                           format="R", # c("R","JSON")
+#                           file=NULL   # optionally write result into file
+# ) {
+#   evalState = .evalResults[[id]] # do we already have a result?
+#   if (is.null(evalState)) { # eval still running, try collect result
+#     evalState = .collectEvalProc(id)
+#     if (!is.null(evalState)) .evalResults[[id]] = evalState
+#   }
+#   result = NULL
+#   if (inherits(evalState,"try-error")) {
+#     result = toString(evalState)
+#   } else {
+#     result = list(
+#       processState=.getEvalProcessState(id,evalState),
+#       result=evalState$result)
+#   }
+#   if (format == "JSON") result = rjson::toJSON(result)
+#   if (!is.null(file)) write(result, file = file) # optional file output
+#   result
+# }
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # evaluation control
@@ -181,9 +280,6 @@ evaluate <- function(id, string, envir=environment()) {
     .evalProcs[[id]] = parallel::mcparallel(
         .evaluateString(id, string, exit=TRUE, envir=envir),
         name=id)
-    # immediatelly initialize a collect for processes returning quickly
-    # Sys.sleep(0.6)
-    # getEvalResult(id)
 }
 
 evaluateToJSON <- function(json) {
@@ -194,5 +290,8 @@ evaluateToJSON <- function(json) {
 
 stopEvaluation <- function(id) {
     proc = .evalProcs[[id]]
-    if (!is.null(proc)) tools::pskill(proc$pid, signal=SIGINT)
+    if (!is.null(proc)) {
+      .evalResults[[id]]$stopCause <- 'INTERRUPT'
+      tools::pskill(proc$pid, signal=SIGINT)
+    }
 }

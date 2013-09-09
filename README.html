@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<!-- saved from url=(0014)about:internet -->
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+
+<title>lively-R-evaluate</title>
+
+<style type="text/css">
+body, td {
+   font-family: sans-serif;
+   background-color: white;
+   font-size: 12px;
+   margin: 8px;
+}
+
+tt, code, pre {
+   font-family: 'DejaVu Sans Mono', 'Droid Sans Mono', 'Lucida Console', Consolas, Monaco, monospace;
+}
+
+h1 { 
+   font-size:2.2em; 
+}
+
+h2 { 
+   font-size:1.8em; 
+}
+
+h3 { 
+   font-size:1.4em; 
+}
+
+h4 { 
+   font-size:1.0em; 
+}
+
+h5 { 
+   font-size:0.9em; 
+}
+
+h6 { 
+   font-size:0.8em; 
+}
+
+a:visited {
+   color: rgb(50%, 0%, 50%);
+}
+
+pre {	
+   margin-top: 0;
+   max-width: 95%;
+   border: 1px solid #ccc;
+   white-space: pre-wrap;
+}
+
+pre code {
+   display: block; padding: 0.5em;
+}
+
+code.r, code.cpp {
+   background-color: #F8F8F8;
+}
+
+table, td, th {
+  border: none;
+}
+
+blockquote {
+   color:#666666;
+   margin:0;
+   padding-left: 1em;
+   border-left: 0.5em #EEE solid;
+}
+
+hr {
+   height: 0px;
+   border-bottom: none;
+   border-top-width: thin;
+   border-top-style: dotted;
+   border-top-color: #999999;
+}
+
+@media print {
+   * { 
+      background: transparent !important; 
+      color: black !important; 
+      filter:none !important; 
+      -ms-filter: none !important; 
+   }
+
+   body { 
+      font-size:12pt; 
+      max-width:100%; 
+   }
+       
+   a, a:visited { 
+      text-decoration: underline; 
+   }
+
+   hr { 
+      visibility: hidden;
+      page-break-before: always;
+   }
+
+   pre, blockquote { 
+      padding-right: 1em; 
+      page-break-inside: avoid; 
+   }
+
+   tr, img { 
+      page-break-inside: avoid; 
+   }
+
+   img { 
+      max-width: 100% !important; 
+   }
+
+   @page :left { 
+      margin: 15mm 20mm 15mm 10mm; 
+   }
+     
+   @page :right { 
+      margin: 15mm 10mm 15mm 20mm; 
+   }
+
+   p, h2, h3 { 
+      orphans: 3; widows: 3; 
+   }
+
+   h2, h3 { 
+      page-break-after: avoid; 
+   }
+}
+
+</style>
+
+
+
+
+
+</head>
+
+<body>
+<h1>lively-R-evaluate</h1>
+
+<p>lively-R-evaluate provides support for R code evaluation for <a href="https://github.com/LivelyKernel/LivelyKernel">Lively Kernel / Lively Web</a>.
+It defines the R API that is called by the <a href="https://github.com/LivelyKernel/RServer">Lively RServer</a>.</p>
+
+<h1>API</h1>
+
+<h2>evaluate(id, sourceString)</h2>
+
+<p>Start a new evaluation under the given id.</p>
+
+<h3>Arguments</h3>
+
+<ul>
+<li>id - String to identify the evaluation process</li>
+<li>sourceString - source code to evaluate</li>
+</ul>
+
+<h3>Example</h3>
+
+<pre><code class="S">require(LivelyREvaluate)
+evaluate(&#39;test&#39;, &#39;1+4&#39;)
+# evaluation happens in asynchronously in subprocess, so wait a bit
+Sys.sleep(0.2)
+getEvalResult(&#39;test&#39;)
+</code></pre>
+
+<p>The evaluation result will the be a pairlist with the fields:</p>
+
+<ul>
+<li><code>interrupted=c(TRUE,FALSE)</code></li>
+<li><code>processState=c(&quot;DONE&quot;,&quot;PENDING&quot;,&quot;NONEXISTANT&quot;)</code></li>
+<li><code>result=</code></li>
+</ul>
+
+<table><thead>
+<tr>
+<th>expr</th>
+<th>source</th>
+<th>value</th>
+<th>text</th>
+<th>graphics</th>
+<th>message</th>
+<th>warning</th>
+<th>error</th>
+</tr>
+</thead><tbody>
+<tr>
+<td>1</td>
+<td>message(&ldquo;hello!&rdquo;)</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+<td>simpleMessage in message(&ldquo;hello!&rdquo;): hello!</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+</tr>
+<tr>
+<td>2</td>
+<td>1+4</td>
+<td>5</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+<td>&lt;NA&gt;</td>
+</tr>
+</tbody></table>
+
+<h2>evaluateToJSON(json)</h2>
+
+<p>Call evaluate by specifying id and source with JSON and return the result as JSON</p>
+
+<h3>Arguments</h3>
+
+<ul>
+<li>json - <code>{id: STRING, source: STRING}</code></li>
+</ul>
+
+<h2>stopEvaluation(id)</h2>
+
+<p>Interrupts an evaluation process.</p>
+
+<h3>Arguments</h3>
+
+<ul>
+<li>id - The process name/identifier (id given by user, not pid!)</li>
+</ul>
+
+<h2>getEvalResult(id)</h2>
+
+<p>Returns the evaluation result.</p>
+
+<h3>Arguments</h3>
+
+<ul>
+<li>id - The eval identifier</li>
+</ul>
+
+<h3>Example</h3>
+
+<p>See <code>evaluate()</code></p>
+
+<h2>getEvalResults()</h2>
+
+<p>Returns all evaluation results.</p>
+
+<h1>License</h1>
+
+<p><a href="LICENSE">MIT license</a></p>
+
+</body>
+
+</html>
+
