@@ -42,12 +42,14 @@ require(tools)
 #   result - data.frame that holds on to the different types of evaluation
 #            output. see evaluate::new_output_handler and .evaluateString() for
 #            more details
-.createEvalState <- function(id="", source="", env=parent.frame()) {
+# was .createEvalState <- function(id="", source="", env=parent.frame()) {
+.createEvalState <- function(id="", source="") {
     list(id=id,
          source=source,
          statementIndex=0,
+         interrupted=FALSE,
          stopCause=NULL,
-         env=env,
+         env=NULL,             # filled in on the execution thread
          result=data.frame(
             source=character(),
             value=character(),
@@ -128,21 +130,18 @@ require(tools)
 }
 
 .whenEvalFinished = function(evalState) {
-    # this is triggered by
-    #  a. orderly exit from a parallel procedure
+    # this is run in the parallel thread, triggered by
+    #  a. orderly exit
     #  b. forced exit (using stopEvaluation)
-    # we are not responsible for clearing up the stored procedure and
-    # any results; this will be done when .collectEvalProc is next called
     parallel:::sendMaster(evalState)
     message('Eval is done')
     quit(save = "no", status = 0, runLast = FALSE)
 }
 
-# here we start the evaluation and define the output_handler used by
-# evaluate::evaluate. Returns an evalState 
-.evaluateString <- function(evalId, string, exit=FALSE, envir=parent.frame()) {
-    evalState = .createEvalState(id=evalId, source=string, env=envir)
-    .evalResults[[evalId]] <- evalState
+# here (running in a parallel execution thread) we start the evaluation and 
+# define the output_handler used by evaluate::evaluate.
+.evaluateString <- function(evalState, string, exit=FALSE, envir=parent.frame()) {
+    execEnv <- evalState$env <- new.env(parent=envir)
     if (exit) {
         # when we are evaluating in a separate process make sure that we quit
         # the process when eval is done
@@ -172,10 +171,10 @@ require(tools)
         value = function(val){ recordResult('value', val); return(val) })
     evaluate::evaluate(
         paste(string, .endMarker, sep="\n"),
-        envir=envir,
+        envir=execEnv,
         stop_on_error=1,
         output_handler=evalHandler)
-    return(evalState)
+    # return(evalState)
 }
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -183,12 +182,15 @@ require(tools)
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 .getEvalProcessState <- function(id) {
+    # invoked in master thread
     #   - no proc => UNKNOWN
-    #   - eval stopped => COMPLETE/INTERRUPT/ERROR
-    #   - eval running => RUNNING
+    #   - eval interrupted => INTERRUPT
+    #   - eval stopped => COMPLETE/ERROR
+    #   - else RUNNING
     proc <- .evalProcs[[id]]
     if (is.null(proc)) return('UNKNOWN')
     state <- .evalResults[[id]]
+    if (state$interrupted) return('INTERRUPT')
     if (!is.null(state$stopCause)) return(state$stopCause)
     return('RUNNING')
 }
@@ -213,11 +215,12 @@ getEvalResult <- function(id,         # id under which the eval was started
                          ) {
     # possible states to be handled:
     #   - no proc => UNKNOWN
-    #   - mcollect gives error => <error>
-    #   - mccollect returns NULL, eval was running => { PENDING, NULL }
-    #   - mccollect returns NULL, eval was stopped => { stopCause, NULL }
-    #   - mccollect returns empty non-NULL result => { stopCause, NULL }
-    #   - mccollect returns non-empty result => { PARTIAL, res }
+    #   - collect gives error => <error>
+    #   - collect returns NULL, eval was running => { PENDING, NULL }
+    #   - collect returns NULL, eval was stopped => { stopCause, NULL }
+    #   - collect returns empty non-NULL result => { stopCause, NULL }
+    #   - collect returns non-empty result with a stopCause => { stopCause, res }
+    #   - collect returns other non-empty result => { PARTIAL, res }
     runningState <- .getEvalProcessState(id)     # before calling mccollect
     if (runningState == 'UNKNOWN') {
       result = list(processState='UNKNOWN', result=NULL)
@@ -230,13 +233,10 @@ getEvalResult <- function(id,         # id under which the eval was started
         if (runningState == 'RUNNING') { processState <- 'PENDING'
           } else { processState <- runningState }
       } else {  # found a new result (though perhaps just an empty one)
-        # if we already had a stopCause, don't overwrite it
-        oldStop <- .evalResults[[id]]$stopCause
-        if (!is.null(oldStop)) newEvalState$stopCause <- oldStop
         .evalResults[[id]] <- newEvalState
         res <- newEvalState$result
-        if (nrow(res) == 0) {
-          res <- NULL
+        if (nrow(res) == 0) res <- NULL
+        if (!is.null(newEvalState$stopCause)) {
           processState <- newEvalState$stopCause
         } else { processState <- 'PARTIAL' }
       }
@@ -275,10 +275,12 @@ getEvalResult <- function(id,         # id under which the eval was started
 # evaluation control
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-evaluate <- function(id, string, envir=environment()) {
-    # evaluate function, main entry point
-    .evalProcs[[id]] = parallel::mcparallel(
-        .evaluateString(id, string, exit=TRUE, envir=envir),
+evaluate <- function(id, string, baseEnv=environment()) {
+  # evaluate function, main entry point
+  evalState = .createEvalState(id=id, source=string)
+  .evalResults[[id]] = evalState
+  .evalProcs[[id]] = parallel::mcparallel(
+        .evaluateString(evalState, string, exit=TRUE, envir=baseEnv),
         name=id)
 }
 
@@ -291,7 +293,7 @@ evaluateToJSON <- function(json) {
 stopEvaluation <- function(id) {
     proc = .evalProcs[[id]]
     if (!is.null(proc)) {
-      .evalResults[[id]]$stopCause <- 'INTERRUPT'
+      .evalResults[[id]]$interrupted <- TRUE
       tools::pskill(proc$pid, signal=SIGINT)
     }
 }
