@@ -276,12 +276,12 @@ getEvalResult <- function(id,         # id under which the eval was started
 # evaluation control
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-evaluate <- function(id, string, baseEnv=environment()) {
+evaluate <- function(id, string, baseEnv=environment(), exit=TRUE) {
   # evaluate function, main entry point
   evalState = .createEvalState(id=id, source=string)
   .evalResults[[id]] = evalState
   .evalProcs[[id]] = parallel::mcparallel(
-        .evaluateString(evalState, string, exit=TRUE, envir=baseEnv),
+        .evaluateString(evalState, string, exit=exit, envir=baseEnv),
         name=id)
 }
 
