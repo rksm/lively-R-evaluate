@@ -282,6 +282,7 @@ evaluate <- function(id, string, baseEnv=environment(), exit=TRUE) {
   .evalResults[[id]] = evalState
   .evalProcs[[id]] = parallel::mcparallel(
         .evaluateString(evalState, string, exit=exit, envir=baseEnv),
+        mc.interactive = TRUE,    # not sure whether this will help
         name=id)
 }
 
