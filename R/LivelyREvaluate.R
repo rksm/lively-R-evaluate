@@ -173,6 +173,7 @@ require(tools)
         paste(string, .endMarker, sep="\n"),
         envir=execEnv,
         stop_on_error=1,
+        new_device=FALSE,
         output_handler=evalHandler)
     # return(evalState)
 }
