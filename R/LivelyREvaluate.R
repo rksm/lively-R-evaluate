@@ -72,22 +72,24 @@ require(tools)
 #   mccollect() is a list of evalState objects (or an error)
 # if the result indicates an error, remove the process and return the error.
 # 
-.collectEvalProc = function(id) {
+.collectEvalProc = function(id,mergeEnvs) {
     forgetProc = function() { remove(list=c(id), envir=.evalProcs) }
 
     proc = .evalProcs[[id]]
     if (is.null(proc)) return(NULL) # no eval process with this id running
     results <- parallel::mccollect(proc, wait=FALSE)
-    if (inherits(results,"try-error")) {
+    if (inherits(results[[1]],"try-error")) {
       warning(paste0("error result from parallel eval process: ", results))
       forgetProc()
       return(results)
     }
     evalState <- results[[1]]
-    if (is.null(evalState)) return(NULL)   # no result available (yet)
-    .mergeEnvironments(globalenv(), evalState$env)
+    if (is.null(evalState)) return(NULL)      # no result available (yet)
+    if (is.null(evalState$env)) return(NULL)  # (some kind of spurious result from mccollect) 
+    if (mergeEnvs) .mergeEnvironments(globalenv(), evalState$env)
     lastResultRow <- nrow(evalState$result)
     if (!is.na(evalState$result[lastResultRow, 'error'])) {
+      # this assumes the evaluation stops on the first error
       evalState$stopCause = "ERROR"
       forgetProc()
     } else if (evalState$result[lastResultRow,'source'] == .endMarker) {
@@ -140,42 +142,47 @@ require(tools)
 
 # here (running in a parallel execution thread) we start the evaluation and 
 # define the output_handler used by evaluate::evaluate.
-.evaluateString <- function(evalState, string, exit=FALSE, envir=parent.frame()) {
+.evaluateString <- function(state, string, exit=TRUE, debug=FALSE, envir=parent.frame()) {
+    evalState <- state
     execEnv <- evalState$env <- new.env(parent=envir)
+    lastSource <- ""
     if (exit) {
-        # when we are evaluating in a separate process make sure that we quit
-        # the process when eval is done
-        on.exit(do.call(".whenEvalFinished", list(evalState)))
+      # when we are evaluating in a separate process make sure that we quit
+      # the process when eval is done
+      exitProc = function() {
+        message("**** exit handler ****")
+        .whenEvalFinished(evalState)
+        }
+        on.exit(exitProc())
     }
     recordResult = function(type, value) {
-        if (type == "source") {
-            evalState$statementIndex <<- evalState$statementIndex + 1
-        }
-        evalState$result[evalState$statementIndex, type] <<- toString(value)
-        # ael: each value- or message-bearing result causes immediate sending
-        # of all results obtained since the last time we sent.
-        # it assumes that all other fields of the latest result are ready (ok?)
-        if (type == "value" || type == "message") {
-            parallel:::sendMaster(evalState)
-            evalState$result <<- evalState$result[FALSE,]   # wipe clean
-            evalState$statementIndex <<- 0
-        }
+      # ael: each result with a value, message, warning or error causes immediate 
+      # sending of an evalState with a result object that contains the new value
+      # associated with the last-reported source
+      evalState$result[1, "source"] <- lastSource
+      evalState$result[1, type] <- toString(value)
+      parallel:::sendMaster(evalState)
+      # evalState$result <<- evalState$result[FALSE,]   # wipe clean (not needed now we push each result)
     }
     evalHandler <- evaluate::new_output_handler(
-        source = function(x){ recordResult('source', x); },
+        source = function(x){ lastSource <<- substr(x, 1, 100) },
         text = function(x){ recordResult('text', x); },
     #    graphics = function(x){ recordResult('graphics', x); },
         message = function(x){ recordResult('message', x); },
         warning = function(x){ recordResult('warning', x); },
         error = function(x){ recordResult('error', x); },
         value = function(val){ recordResult('value', val); return(val) })
+    # if we want the process to terminate upon executing the last instruction,
+    # add a marker so we can shut the watcher down cleanly
+    toEval <- string
+    if (exit) toEval <- paste(toEval, .endMarker, sep="\n")
     evaluate::evaluate(
-        paste(string, .endMarker, sep="\n"),
+        toEval,
         envir=execEnv,
         stop_on_error=1,
         new_device=FALSE,
+        debug=debug,
         output_handler=evalHandler)
-    # return(evalState)
 }
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -209,10 +216,11 @@ getEvalResults <- function() {
     lapply(ls(.evalResults), getEvalResult)
 }
 
-# return a specific eval result
-getEvalResult <- function(id,         # id under which the eval was started
-                         format="R", # c("R","JSON")
-                         file=NULL   # optionally write result into file
+# run in master thread.  fetch and return next result (if available) from the slave
+getEvalResult <- function(id,              # id under which the eval was started
+                         mergeEnvs=TRUE,   # whether to grab new/updated vars
+                         format="R",       # c("R","JSON")
+                         file=NULL         # optionally write result into file
                          ) {
     # possible states to be handled:
     #   - no proc => UNKNOWN
@@ -226,7 +234,7 @@ getEvalResult <- function(id,         # id under which the eval was started
     if (runningState == 'UNKNOWN') {
       result = list(processState='UNKNOWN', result=NULL)
     } else {
-      newEvalState <- .collectEvalProc(id)
+      newEvalState <- .collectEvalProc(id,mergeEnvs)
       if (inherits(newEvalState,"try-error")) {
         res <- toString(newEvalState)
       } else if (is.null(newEvalState)) {
@@ -276,13 +284,14 @@ getEvalResult <- function(id,         # id under which the eval was started
 # evaluation control
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-evaluate <- function(id, string, baseEnv=environment(), exit=TRUE) {
+evaluate <- function(id, string, baseEnv=globalenv(), exit=TRUE, debug=FALSE) {
   # evaluate function, main entry point
+  # ael: default base environment to globalenv rather than environment()
   evalState = .createEvalState(id=id, source=string)
   .evalResults[[id]] = evalState
   .evalProcs[[id]] = parallel::mcparallel(
-        .evaluateString(evalState, string, exit=exit, envir=baseEnv),
-        mc.interactive = TRUE,    # not sure whether this will help
+        .evaluateString(evalState, string, exit=exit, debug=debug, envir=baseEnv),
+        # mc.interactive = TRUE,    # debatable; not sure it buys us anything
         name=id)
 }
 
@@ -296,6 +305,6 @@ stopEvaluation <- function(id) {
     proc = .evalProcs[[id]]
     if (!is.null(proc)) {
       .evalResults[[id]]$interrupted <- TRUE
-      tools::pskill(proc$pid, signal=SIGINT)
+      tools::pskill(proc$pid, signal=SIGKILL)
     }
 }
