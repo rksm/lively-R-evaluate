@@ -94,7 +94,8 @@ forgetProc = function(id) { remove(list=c(id), envir=.evalProcs) }
     }
     evalState <- results[[1]]
     if (is.null(evalState)) return(NULL)      # no result available (yet)
-    if (is.null(evalState$env)) return(NULL)  # (some kind of spurious result from mccollect) 
+    if (is.atomic(evalState)) return(NULL)    # (some kind of spurious result from mccollect)
+    if (is.null(evalState$env)) return(NULL)  # ditto
     if (mergeEnvs) .mergeEnvironments(globalenv(), evalState$env)
     lastResultRow <- nrow(evalState$result)
     if (!is.na(evalState$result[lastResultRow, 'error'])) {
@@ -188,7 +189,7 @@ forgetProc = function(id) { remove(list=c(id), envir=.evalProcs) }
     evaluate::evaluate(
         toEval,
         envir=execEnv,
-        stop_on_error=1,
+        stop_on_error=1,  # usually 1; 2 to avoid using try/catch
         new_device=FALSE,
         debug=debug,
         output_handler=evalHandler)
