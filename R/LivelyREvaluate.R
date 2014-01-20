@@ -310,7 +310,7 @@ evaluate <- function(id, string, baseEnv=globalenv(), exit=TRUE, debug=FALSE) {
 
 evaluateToJSON <- function(json) {
     # json = {id: STRING, source: STRING}
-    jso = as.environment(rjson::fromJSON(json)) # make it a hash
+    jso = as.environment(rjson::fromJSON(json, asText=TRUE)) # make it a hash
     evaluate(jso$id, jso$source)
 }
 
